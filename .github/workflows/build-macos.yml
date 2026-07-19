@@ -1,0 +1,70 @@
+name: Build macOS (Apple Silicon)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: macos-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build aarch64-apple-darwin
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (respect rust-toolchain.toml)
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Install the pinned toolchain from rust-toolchain.toml
+          rustup show
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: macos-aarch64-pager
+          cache-on-failure: true
+
+      - name: Install DotSlash
+        run: |
+          cargo install dotslash --locked
+          command -v dotslash
+          /usr/bin/env dotslash --help >/dev/null
+
+      - name: Verify protoc via bin/protoc (DotSlash)
+        run: |
+          ./bin/protoc --version
+
+      - name: Build release binary
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          cargo build -p xai-grok-pager-bin --release
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          cp target/release/xai-grok-pager dist/grok
+          chmod +x dist/grok
+          file dist/grok
+          # Version may need network/auth; don't fail the job if it errors.
+          ./dist/grok --version || true
+          ls -lh dist/grok
+
+      - name: Upload macOS binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-macos-aarch64-${{ github.sha }}
+          path: dist/grok
+          if-no-files-found: error
+          retention-days: 14
